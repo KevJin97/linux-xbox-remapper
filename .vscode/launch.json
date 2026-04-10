@@ -1,0 +1,39 @@
+{
+	"version": "0.2.0",
+	"configurations":
+	[
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug: CMake Project (Make)",
+			"program": "${workspaceFolder}/build/${workspaceFolderBasename}",
+			"cwd": "${workspaceFolder}",
+			"preLaunchTask": "build-debug-make"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Release: CMake Project (Make)",
+			"program": "${workspaceFolder}/build/${workspaceFolderBasename}",
+			"cwd": "${workspaceFolder}",
+			"preLaunchTask": "release-compile-make"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Debug: CMake Project (Ninja)",
+			"program": "${workspaceFolder}/build/${workspaceFolderBasename}",
+			"cwd": "${workspaceFolder}",
+			"preLaunchTask": "build-debug-ninja"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
+			"name": "Release: CMake Project (Ninja)",
+			"program": "${workspaceFolder}/build/${workspaceFolderBasename}",
+			"cwd": "${workspaceFolder}",
+			"preLaunchTask": "release-compile-ninja"
+		}
+		
+	]
+}

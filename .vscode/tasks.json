@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks":
+	[
+		{
+			"label": "build-debug-make",
+			"type": "shell",
+			"command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build"
+		},
+		{
+			"label": "release-compile-make",
+			"type": "shell",
+			"command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --install install"
+		},
+		{
+			"label": "build-debug-ninja",
+			"type": "shell",
+			"command": "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build build",
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		},
+		{
+			"label": "release-compile-ninja",
+			"type": "shell",
+			"command": "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --install install"
+		}
+	]
+}
