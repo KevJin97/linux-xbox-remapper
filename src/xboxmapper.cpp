@@ -112,7 +112,7 @@ void Controller_Mapper::process_abs_event(unsigned code, int value)
 	constexpr int pp_arrowkeys[2][2] = { { KEY_LEFT, KEY_RIGHT }, { KEY_UP, KEY_DOWN } };
 	constexpr int p_mousebuttons[2] = { BTN_RIGHT, BTN_LEFT };
 	constexpr int scaling_factor[4] = { 20000, 17500, 15000, 12500 };
-	constexpr int deadzone = 500;
+	constexpr int deadzone = 700;
 	
 	bool option = 1;
 	int mapped_code = 0;
