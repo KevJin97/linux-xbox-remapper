@@ -19,7 +19,7 @@ int main()
 		}
 		else
 		{
-			controller.wait_for_new_event(at_path);
+			controller.wait_for_new_event();
 		}
 	}
 

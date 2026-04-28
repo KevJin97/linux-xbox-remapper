@@ -1,4 +1,5 @@
-#include <thread>
+#include <climits>
+#include <sys/poll.h>
 #include <xboxmapper.hpp>
 
 #include "libevdev/libevdev-uinput.h"
@@ -14,8 +15,17 @@
 #include <unistd.h>
 
 #include <grp.h>
+#include <linux/input.h>
 #include <sys/eventfd.h>
 #include <systemd/sd-bus.h>
+
+static void signal_exit(Controller_Mapper* self_opaque, int event_signal_fd, std::atomic_bool& exit_signal)
+{
+	exit_signal.store(true, std::memory_order_release);
+	exit_signal.notify_all();
+	uint64_t val = 1;
+	write(event_signal_fd, &val, sizeof(val));
+}
 
 int Controller_Mapper::change_group_permissions()
 {
@@ -44,6 +54,115 @@ int Controller_Mapper::return_to_original_group_permissions(int gid)
 		return -1;
 	}
 	return 0;
+}
+
+void Controller_Mapper::process_key_event(unsigned code, int value)
+{
+	int keycode = 0;
+
+	switch (code)
+	{
+		case KEY_RECORD:
+			break;
+
+		case BTN_SOUTH:
+			keycode = KEY_ENTER;
+			break;
+
+		case BTN_EAST:
+			keycode = KEY_BACKSPACE;
+			break;
+
+		case BTN_NORTH:
+			break;
+
+		case BTN_WEST:
+			keycode = BTN_BACK;
+			break;
+			
+		case BTN_TL:
+			libevdev_uinput_write_event(this->virt_dev, EV_KEY, KEY_LEFTSHIFT, value);
+		case BTN_TR:
+			keycode = KEY_TAB;
+			break;
+
+		case BTN_SELECT:
+			++this->ptr_speed_setting %= 4;
+			break;
+
+		case BTN_START:
+		case BTN_MODE:
+		case BTN_THUMBL:
+		case BTN_THUMBR:
+		default:
+			return;
+	}
+
+	libevdev_uinput_write_event(this->virt_dev, EV_KEY, keycode, value);
+}
+
+void Controller_Mapper::process_abs_event(unsigned code, int value)
+{
+	constexpr int (*absolute)(const int&) = [](const int& value)
+	{
+		int mask = value >> 31;
+		return (value ^ mask) - mask;
+	};
+
+	constexpr int pp_arrowkeys[2][2] = { { KEY_LEFT, KEY_RIGHT }, { KEY_UP, KEY_DOWN } };
+	constexpr int p_mousebuttons[2] = { BTN_RIGHT, BTN_LEFT };
+	constexpr int scaling_factor[4] = { 20000, 17500, 15000, 12500 };
+	constexpr int deadzone = 500;
+	
+	bool option = 1;
+	int mapped_code = 0;
+	int mapped_value = 0;
+
+	switch (code)
+	{
+		// Choose between options left/right or up/down and if pressed more than halfway, enable button press
+		case ABS_X:
+			option = 0;
+		case ABS_Y:
+			mapped_code = pp_arrowkeys[option][value < 0];
+			mapped_value = (absolute(value) >= INT16_MAX / 2);
+			break;
+
+		// Choose between options left/right pointer motions and scale the speed if greater than deadzone
+		case ABS_RX:
+			option = 0;
+		case ABS_RY:
+			this->ptr_velocity[option] = (absolute(value) > deadzone) ?
+				(float)((1 - ((value >> 31) & 2)) * (absolute(value) - deadzone)) / scaling_factor[this->ptr_speed_setting]
+				:
+				0.0f;
+			return;
+		
+		// Choose option left/right mouse clicks and if pressed more than halfway, enable button press
+		case ABS_Z:
+			option = 0;
+		case ABS_RZ:
+			mapped_code = p_mousebuttons[option];
+			mapped_value = (value >= 1024 / 2);
+			break;
+
+		// Choose between options left/right or up/down and if pressed more than halfway, enable button press
+		case ABS_HAT0X:
+			option = 0;
+		case ABS_HAT0Y:
+			if (value == 0)
+			{
+				libevdev_uinput_write_event(this->virt_dev, EV_KEY, pp_arrowkeys[option][value <= 0], 0);
+			}
+			mapped_code = pp_arrowkeys[option][value > 0];
+			mapped_value = absolute(value);
+			break;
+
+		default:
+			return;
+	}
+
+	libevdev_uinput_write_event(this->virt_dev, EV_KEY, mapped_code, mapped_value);
 }
 
 void Controller_Mapper::enable_virtual_device()
@@ -160,14 +279,6 @@ bool Controller_Mapper::check_process_running(const std::string& name)
 		}
 	}
 	return false;
-}
-
-static void signal_exit(Controller_Mapper* self_opaque, int event_signal_fd, std::atomic_bool& exit_signal)
-{
-	exit_signal.store(true, std::memory_order_release);
-	exit_signal.notify_all();
-	uint64_t val = 1;
-	write(event_signal_fd, &val, sizeof(val));
 }
 
 int Controller_Mapper::on_prepare_for_shutdown(sd_bus_message* msg, void* userdata, sd_bus_error* /*error*/)
@@ -507,7 +618,7 @@ void Controller_Mapper::check_for_device(const std::string& at_path)
 	}
 }
 
-void Controller_Mapper::wait_for_new_event(const std::string& at_path)
+void Controller_Mapper::wait_for_new_event()
 {
 	struct pollfd pfd;
 	pfd.fd = this->event_signal_fd;
@@ -529,11 +640,84 @@ bool Controller_Mapper::has_been_found()
 
 void Controller_Mapper::map_keys()
 {
-	if (this->dev == nullptr)
+	if (this->dev == nullptr || this->virt_dev == nullptr)
 		return;
+	
+	int poll_timeout = -1;	// In milliseconds
+	struct pollfd pfd[2];
+
+	pfd[0].fd = libevdev_get_fd(this->dev);
+	pfd[0].events = POLLIN | POLLHUP | POLLERR;
+	pfd[1].fd = this->event_signal_fd;
+	pfd[1].events = POLLIN;
 
 	while (this->is_not_exit_signal())
 	{
-		std::this_thread::sleep_for(std::chrono::seconds(5));
+		if (libevdev_has_event_pending(this->dev))
+		{
+			struct input_event ev;
+			libevdev_next_event(this->dev, LIBEVDEV_READ_FLAG_NORMAL, &ev);
+			switch (ev.type)
+			{
+				case EV_SYN:
+					libevdev_uinput_write_event(this->virt_dev, EV_SYN, SYN_REPORT, 0);
+					break;
+
+				case EV_KEY:
+					this->process_key_event(ev.code, ev.value);
+					break;
+
+				case EV_ABS:
+					this->process_abs_event(ev.code, ev.value);
+					break;
+
+				default:
+					break;
+			}
+		}
+
+		if ((int)this->ptr_velocity[0] || (int)this->ptr_velocity[1])
+		{
+			poll_timeout = 1;
+			this->ptr_accumulator[0] += this->ptr_velocity[0];
+			this->ptr_accumulator[1] += this->ptr_velocity[1];
+
+			int dx = (int)this->ptr_accumulator[0];
+			int dy = (int)this->ptr_accumulator[1];
+
+			if (dx || dy)
+			{
+				this->ptr_accumulator[0] -= dx;
+				this->ptr_accumulator[1] -= dy;
+				libevdev_uinput_write_event(this->virt_dev, EV_REL, REL_X, dx);
+				libevdev_uinput_write_event(this->virt_dev, EV_REL, REL_Y, dy);
+				libevdev_uinput_write_event(this->virt_dev, EV_SYN, SYN_REPORT, 0);
+			}
+		}
+		else
+		{
+			poll_timeout = -1;
+		}
+		
+		if (poll(pfd, 2, poll_timeout) < 0)	// Handle polling error
+		{
+			std::cerr << "Input polling failed: " << strerror(errno) << std::endl;
+			break;
+		}
+		else if (pfd[0].revents & (POLLHUP | POLLERR))
+		{
+			libevdev_free(this->dev);
+			this->dev = nullptr;
+
+			libevdev_uinput_destroy(this->virt_dev);
+			this->virt_dev = nullptr;
+			break;
+		}
+		if (pfd[1].revents & POLLIN)
+		{
+			uint64_t val;
+			read(this->event_signal_fd, &val, sizeof(val));
+			break;
+		}
 	}
 }

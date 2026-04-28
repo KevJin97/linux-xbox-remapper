@@ -24,6 +24,9 @@ class Controller_Mapper
 		std::atomic_bool grab_signal = false;
 		struct libevdev* dev = nullptr;
 		struct libevdev_uinput* virt_dev = nullptr;
+		int ptr_speed_setting = 0;
+		float ptr_velocity[2] = { 0.0f };
+		float ptr_accumulator[2] = { 0.0f };
 
 		struct udev* udev_ctx = nullptr;
 		struct udev_monitor* udev_mon = nullptr;
@@ -32,6 +35,8 @@ class Controller_Mapper
 
 		int change_group_permissions();
 		int return_to_original_group_permissions(int gid);
+		void process_key_event(unsigned code, int value);
+		void process_abs_event(unsigned code, int value);
 		void enable_virtual_device();
 		bool substring_contains(const std::string& to_search, const std::string& to_compare, bool case_sensitive=true);
 		bool check_process_running(const std::string& name);
@@ -43,7 +48,7 @@ class Controller_Mapper
 		void wait_for_triggers();
 		bool is_not_exit_signal();
 		void check_for_device(const std::string& at_path);
-		void wait_for_new_event(const std::string& at_path);
+		void wait_for_new_event();
 		bool has_been_found();
 		void map_keys();
 };
